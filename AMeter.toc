@@ -1,0 +1,14 @@
+## Interface: 16001
+## Title: AMeter
+## Notes: Damage and healing meter
+## Version: 0.1.0
+## Category: Combat
+## IconTexture: Interface\Icons\Ability_Warrior_BattleShout
+## Dependencies: ACore
+## SavedVariables: AMeterDB
+
+Core.lua
+Native.lua
+Log.lua
+Data.lua
+UI.lua

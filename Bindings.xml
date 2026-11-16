@@ -1,0 +1,5 @@
+<Bindings>
+	<Binding name="AMETER_TOGGLE" header="AMETER" category="ADDONS">
+		AMeter_ToggleBinding()
+	</Binding>
+</Bindings>
