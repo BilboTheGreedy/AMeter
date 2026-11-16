@@ -149,7 +149,7 @@ local function handle(...)
 end
 
 function Log.Exists()
-	return CombatLogGetCurrentEventInfo ~= nil
+	return CombatLogGetCurrentEventInfo ~= nil and C_DamageMeter == nil
 end
 
 local function segment(key)

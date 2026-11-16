@@ -12,7 +12,7 @@ local defaults = {
 	default = { "RIGHT", "RIGHT", -60, -120 },
 }
 
-ACore.New(ADDON, ns, { db = "AMeterDB", defaults = defaults })
+ACore.New(ADDON, ns, { db = "AMeterDB", defaults = defaults, profile = true })
 
 ns.MODES = {
 	{ key = "damage", title = "Damage", type = "DamageDone", both = true },
