@@ -149,7 +149,13 @@ local function handle(...)
 end
 
 function Log.Exists()
-	return CombatLogGetCurrentEventInfo ~= nil and C_DamageMeter == nil
+	return CombatLogGetCurrentEventInfo ~= nil and C_DamageMeter == nil and issecretvalue == nil
+end
+
+local KINDS = { DamageDone = true, HealingDone = true, DamageTaken = true, Interrupts = true, Dispels = true, Deaths = true }
+
+function Log.Supports(mode)
+	return KINDS[mode.base or mode.type] == true
 end
 
 local function segment(key)

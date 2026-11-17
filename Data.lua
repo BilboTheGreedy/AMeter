@@ -13,7 +13,7 @@ local function anySecret(rows)
 end
 
 local function finish(out)
-	out.secret = anySecret(out.rows) or ns.IsSecret(out.max)
+	out.secret = anySecret(out.rows) or ns.IsSecret(out.max) or ns.IsSecret(out.total)
 	if not out.secret then
 		local max = 0
 		for _, r in ipairs(out.rows) do
@@ -53,8 +53,12 @@ end
 
 function Data.Supports(mode)
 	if not source then return false end
-	if source.api == ns.Native then return ns.Native.Supports(mode) end
-	return true
+	return source.api.Supports(mode)
+end
+
+function Data.Sessions()
+	if not source or not source.api.Sessions then return {} end
+	return source.api.Sessions()
 end
 
 function Data.Session(segment, mode)
@@ -81,12 +85,13 @@ ns:Listen("LOGIN", function()
 		source = { api = ns.Log, label = "combat log" }
 	end
 	if source then source.api.Start() end
-	ns:On("PLAYER_ENTERING_WORLD", function()
-		if not ns.db.autoreset or not IsInInstance or not GetInstanceInfo then return end
+	ns:On("PLAYER_ENTERING_WORLD", function(login, reload)
+		if not IsInInstance or not GetInstanceInfo then return end
 		local inside = IsInInstance()
 		local _, _, _, _, _, _, _, id = GetInstanceInfo()
 		if ns.IsSecret(inside) or ns.IsSecret(id) then return end
-		if inside and id ~= lastInstance then
+		local fresh = not (login == true or reload == true)
+		if ns.db.autoreset and fresh and inside and id ~= lastInstance then
 			Data.Reset()
 		end
 		lastInstance = inside and id or nil

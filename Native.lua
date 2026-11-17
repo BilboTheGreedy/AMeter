@@ -10,7 +10,7 @@ local TYPE_IDS = {
 
 local function typeId(name)
 	local e = Enum and Enum.DamageMeterType
-	if e and e[name] ~= nil then return e[name] end
+	if e then return e[name] end
 	return TYPE_IDS[name]
 end
 
@@ -41,29 +41,60 @@ function Native.Supports(mode)
 end
 
 local function plain(v, kind)
-	if type(v) == "nil" or ns.IsSecret(v) then return nil end
+	if ns.IsSecret(v) or type(v) == "nil" then return nil end
 	if kind and type(v) ~= kind then return nil end
 	return v
+end
+
+function Native.Sessions()
+	local out = {}
+	if not C_DamageMeter.GetAvailableCombatSessions or not C_DamageMeter.GetCombatSessionFromID then return out end
+	local ok, list = pcall(C_DamageMeter.GetAvailableCombatSessions)
+	if not ok or ns.IsSecret(list) or type(list) ~= "table" then return out end
+	for _, s in ipairs(list) do
+		if not ns.IsSecret(s) and type(s) == "table" then
+			local id = plain(s.sessionID, "number")
+			if id then
+				out[#out + 1] = { id = id, name = plain(s.name, "string"), duration = plain(s.durationSeconds, "number") }
+			end
+		end
+	end
+	return out
+end
+
+local function session(segment, id)
+	if type(segment) == "number" then
+		if not C_DamageMeter.GetCombatSessionFromID then return false end
+		return pcall(C_DamageMeter.GetCombatSessionFromID, segment, id)
+	end
+	return pcall(C_DamageMeter.GetCombatSessionFromType, sessionType(segment), id)
+end
+
+local function source(segment, id, guid, creature)
+	if type(segment) == "number" then
+		if not C_DamageMeter.GetCombatSessionSourceFromID then return false end
+		return pcall(C_DamageMeter.GetCombatSessionSourceFromID, segment, id, guid, creature)
+	end
+	return pcall(C_DamageMeter.GetCombatSessionSourceFromType, sessionType(segment), id, guid, creature)
 end
 
 function Native.Session(segment, mode)
 	local out = { rows = {} }
 	local id = typeId(mode.type)
 	if id == nil then return out end
-	local st = sessionType(segment)
-	local ok, session = pcall(C_DamageMeter.GetCombatSessionFromType, st, id)
-	if not ok or type(session) ~= "table" or ns.IsSecret(session) then return out end
-	local sources = session.combatSources
-	if type(sources) ~= "table" or ns.IsSecret(sources) then return out end
-	out.max = session.maxAmount
-	out.total = session.totalAmount
-	if C_DamageMeter.GetSessionDurationSeconds then
-		local dok, d = pcall(C_DamageMeter.GetSessionDurationSeconds, st)
+	local ok, data = session(segment, id)
+	if not ok or ns.IsSecret(data) or type(data) ~= "table" then return out end
+	local sources = data.combatSources
+	if ns.IsSecret(sources) or type(sources) ~= "table" then return out end
+	out.max = data.maxAmount
+	out.total = data.totalAmount
+	if type(segment) ~= "number" and C_DamageMeter.GetSessionDurationSeconds then
+		local dok, d = pcall(C_DamageMeter.GetSessionDurationSeconds, sessionType(segment))
 		if dok then out.duration = d end
 	end
-	if type(out.duration) == "nil" then out.duration = session.durationSeconds end
+	if type(out.duration) == "nil" then out.duration = data.durationSeconds end
 	for _, src in ipairs(sources) do
-		if type(src) == "table" and not ns.IsSecret(src) then
+		if not ns.IsSecret(src) and type(src) == "table" then
 			local value = src.totalAmount
 			if mode.rate and type(src.amountPerSecond) ~= "nil" then value = src.amountPerSecond end
 			out.rows[#out.rows + 1] = {
@@ -86,14 +117,22 @@ function Native.Spells(segment, mode, row)
 	local out = { rows = {} }
 	local id = typeId(mode.type)
 	if id == nil then return out end
-	local ok, src = pcall(C_DamageMeter.GetCombatSessionSourceFromType, sessionType(segment), id, row.guid, row.creatureID)
-	if not ok or type(src) ~= "table" or ns.IsSecret(src) then return out end
+	local guid, creature = row.guid, row.creatureID
+	if row.me and UnitGUID then
+		local own = UnitGUID("player")
+		if plain(own, "string") then guid, creature = own, nil end
+	end
+	local ok, src = source(segment, id, guid, creature)
+	if not ok or ns.IsSecret(src) or type(src) ~= "table" then
+		out.hidden = ns.IsSecret(guid) or ns.IsSecret(creature)
+		return out
+	end
 	local spells = src.combatSpells
-	if type(spells) ~= "table" or ns.IsSecret(spells) then return out end
+	if ns.IsSecret(spells) or type(spells) ~= "table" then return out end
 	out.max = src.maxAmount
 	out.total = src.totalAmount
 	for _, sp in ipairs(spells) do
-		if type(sp) == "table" and not ns.IsSecret(sp) then
+		if not ns.IsSecret(sp) and type(sp) == "table" then
 			local value = sp.totalAmount
 			if mode.rate and type(sp.amountPerSecond) ~= "nil" then value = sp.amountPerSecond end
 			out.rows[#out.rows + 1] = {

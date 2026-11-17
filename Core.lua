@@ -9,6 +9,7 @@ local defaults = {
 	rows = 8,
 	width = 250,
 	autoreset = true,
+	combatOnly = false,
 	default = { "RIGHT", "RIGHT", -60, -120 },
 }
 
@@ -20,6 +21,9 @@ ns.MODES = {
 	{ key = "healing", title = "Healing", type = "HealingDone", both = true },
 	{ key = "hps", title = "HPS", type = "Hps", base = "HealingDone", rate = true },
 	{ key = "taken", title = "Damage taken", type = "DamageTaken" },
+	{ key = "avoidable", title = "Avoidable damage taken", type = "AvoidableDamageTaken" },
+	{ key = "enemy", title = "Enemy damage taken", type = "EnemyDamageTaken" },
+	{ key = "absorbs", title = "Absorbs", type = "Absorbs" },
 	{ key = "interrupts", title = "Interrupts", type = "Interrupts", count = true },
 	{ key = "dispels", title = "Dispels", type = "Dispels", count = true },
 	{ key = "deaths", title = "Deaths", type = "Deaths", deaths = true },
@@ -70,6 +74,7 @@ ACore.Register({
 	title = "AMeter",
 	slash = "/ameter",
 	desc = "damage and healing meter",
+	options = function() return ns.Options() end,
 	toggle = function() ns.UI.Toggle() end,
 })
 

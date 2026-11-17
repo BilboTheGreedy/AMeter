@@ -10,7 +10,21 @@ local PLAIN_COLOR = { 0.5, 0.52, 0.6 }
 
 local frame
 local view = { rows = {} }
-local state = { detail = nil }
+local state = { detail = nil, session = nil }
+local fighting = InCombatLockdown and InCombatLockdown() and true or false
+
+local function segment()
+	return state.session or ns.db.segment
+end
+
+local function segmentTitle()
+	if state.session then return state.sessionName or "Earlier fight" end
+	return ns.SegmentTitle(ns.db.segment)
+end
+
+local function askReset()
+	UI.Confirm("Reset all AMeter data?", function() Data.Reset() end)
+end
 
 local function mode()
 	return ns.Mode(ns.db.mode)
@@ -85,14 +99,14 @@ local function closeDetail()
 	UI.Refresh()
 end
 
-local function report(channel)
+local function report(channel, target)
 	local m = mode()
 	if view.secret then
 		ns.Print("numbers are hidden during combat, report after the fight")
 		return
 	end
 	local lines = {}
-	local head = "AMeter: " .. m.title .. ", " .. ns.SegmentTitle(ns.db.segment)
+	local head = "AMeter: " .. m.title .. ", " .. segmentTitle()
 	if state.detail and type(state.detail.name) == "string" and not ns.IsSecret(state.detail.name) then
 		head = head .. ", " .. state.detail.name
 	end
@@ -114,12 +128,24 @@ local function report(channel)
 	local send = (C_ChatInfo and C_ChatInfo.SendChatMessage) or SendChatMessage
 	if not send then return end
 	for _, line in ipairs(lines) do
-		local ok = pcall(send, line, channel)
+		local ok = pcall(send, line, channel, nil, target)
 		if not ok then
 			ns.Print("could not send to " .. channel:lower())
 			return
 		end
 	end
+end
+
+local function whisper()
+	local name
+	if UnitExists and UnitExists("target") and UnitIsPlayer and UnitIsPlayer("target") then
+		if GetUnitName then name = GetUnitName("target", true) else name = UnitName("target") end
+	end
+	if ns.IsSecret(name) or type(name) ~= "string" or name == "" then
+		ns.Print("target a player to whisper the report")
+		return
+	end
+	report("WHISPER", name)
 end
 
 local function resize()
@@ -145,10 +171,24 @@ local function modeMenu(anchor)
 	entries[#entries + 1] = { text = "Fight", title = true }
 	for _, s in ipairs(ns.SEGMENTS) do
 		entries[#entries + 1] = {
-			text = s.title, checked = ns.db.segment == s.key,
+			text = s.title, checked = not state.session and ns.db.segment == s.key,
 			func = function()
 				ns.db.segment = s.key
-				state.detail = nil
+				state.session, state.detail = nil, nil
+				UI.Refresh()
+			end,
+		}
+	end
+	local sessions = Data.Sessions()
+	for i = #sessions, math.max(1, #sessions - 7), -1 do
+		local s = sessions[i]
+		local text = s.name or ("Fight " .. s.id)
+		local clock = ns.Clock(s.duration)
+		if clock ~= "" then text = text .. "  " .. clock end
+		entries[#entries + 1] = {
+			text = text, checked = state.session == s.id,
+			func = function()
+				state.session, state.sessionName, state.detail = s.id, s.name, nil
 				UI.Refresh()
 			end,
 		}
@@ -156,20 +196,19 @@ local function modeMenu(anchor)
 	UI.Menu(anchor, entries)
 end
 
-local function gearMenu(anchor)
+local function applyShown()
+	if not frame then return end
+	frame:SetShown(ns.db.shown and (not ns.db.combatOnly or fighting) and true or false)
+	UI.Refresh()
+end
+
+local function settings(entries)
 	local db = ns.db
-	local entries = {
-		{ text = "Reset data", func = function() Data.Reset() end },
-		{ text = "Report to", title = true },
-		{ text = "Say", func = function() report("SAY") end },
-		{ text = "Party", func = function() report("PARTY") end },
-		{ text = "Raid", func = function() report("RAID") end },
-		{ text = "Guild", func = function() report("GUILD") end },
-		{ text = "Options", title = true },
-		ACore.UI.Toggle(db, "locked", "Lock position"),
-		ACore.UI.Toggle(db, "autoreset", "Reset when entering an instance"),
-		{ text = "Rows", title = true },
-	}
+	entries[#entries + 1] = { text = "Options", title = true }
+	entries[#entries + 1] = UI.Check(db, "locked", "Lock position")
+	entries[#entries + 1] = UI.Check(db, "autoreset", "Reset when entering an instance")
+	entries[#entries + 1] = UI.Check(db, "combatOnly", "Show only in combat", applyShown)
+	entries[#entries + 1] = { text = "Rows", title = true }
 	for _, n in ipairs({ 5, 8, 10, 15 }) do
 		entries[#entries + 1] = {
 			text = tostring(n), checked = db.rows == n,
@@ -179,9 +218,60 @@ local function gearMenu(anchor)
 			end,
 		}
 	end
-	for _, e in ipairs(UI.ScaleEntries(db, function(s) frame:SetScale(s) end)) do
+	entries[#entries + 1] = { text = "Width", title = true }
+	for _, n in ipairs({ 200, 250, 300, 360 }) do
+		entries[#entries + 1] = {
+			text = tostring(n), checked = db.width == n,
+			func = function()
+				db.width = n
+				resize()
+			end,
+		}
+	end
+	for _, e in ipairs(UI.ScaleEntries(db, function(s)
+		if frame then frame:SetScale(s) end
+	end)) do
 		entries[#entries + 1] = e
 	end
+	return entries
+end
+
+function ns.Options()
+	local db = ns.db
+	local entries = {
+		{ text = "AMeter", title = true },
+		{ text = "Show the window", checked = db.shown, func = function()
+			if db.shown then UI.Hide() else UI.Show() end
+		end },
+		{ text = "Reset data", func = askReset },
+		{ text = "Show", title = true },
+	}
+	for _, m in ipairs(ns.MODES) do
+		if Data.Supports(m) then
+			entries[#entries + 1] = {
+				text = m.title, checked = db.mode == m.key,
+				func = function()
+					db.mode = m.key
+					ns:Fire("VIEW_CHANGED")
+				end,
+			}
+		end
+	end
+	return settings(entries)
+end
+
+local function gearMenu(anchor)
+	local entries = {
+		{ text = "Reset data", func = askReset },
+		{ text = "Report to", title = true },
+		{ text = "Say", func = function() report("SAY") end },
+		{ text = "Party", func = function() report("PARTY") end },
+		{ text = "Raid", func = function() report("RAID") end },
+		{ text = "Guild", func = function() report("GUILD") end },
+		{ text = "Officers", func = function() report("OFFICER") end },
+		{ text = "Whisper target", func = whisper },
+	}
+	settings(entries)
 	entries[#entries + 1] = { text = "Hide AMeter", func = function() UI.Hide() end }
 	UI.Menu(anchor, entries)
 end
@@ -191,15 +281,17 @@ local function showTooltip(bar)
 	if not d or d.kind == "note" or not GameTooltip then return end
 	local m = mode()
 	GameTooltip:SetOwner(bar, "ANCHOR_LEFT")
-	GameTooltip:AddLine(label(d), 1, 0.82, 0)
+	if not pcall(GameTooltip.AddLine, GameTooltip, label(d), 1, 0.82, 0) then
+		GameTooltip:AddLine(m.title, 1, 0.82, 0)
+	end
 	if has(d.total) and not m.deaths then
-		GameTooltip:AddDoubleLine(m.count and "Count" or "Total", ns.Number(d.total), 0.9, 0.9, 0.92, 1, 1, 1)
+		pcall(GameTooltip.AddDoubleLine, GameTooltip, m.count and "Count" or "Total", ns.Number(d.total), 0.9, 0.9, 0.92, 1, 1, 1)
 	end
 	if has(d.rate) and not m.count and not m.deaths then
-		GameTooltip:AddDoubleLine("Per second", ns.Number(d.rate), 0.9, 0.9, 0.92, 1, 1, 1)
+		pcall(GameTooltip.AddDoubleLine, GameTooltip, "Per second", ns.Number(d.rate), 0.9, 0.9, 0.92, 1, 1, 1)
 	end
 	if m.deaths and not state.detail then
-		GameTooltip:AddDoubleLine("Died at", ns.Clock(d.time), 0.9, 0.9, 0.92, 1, 1, 1)
+		pcall(GameTooltip.AddDoubleLine, GameTooltip, "Died at", ns.Clock(d.time), 0.9, 0.9, 0.92, 1, 1, 1)
 	end
 	if state.detail then
 		GameTooltip:AddLine("Click to go back", 0.58, 0.6, 0.65)
@@ -291,13 +383,15 @@ local function build()
 	gear:SetWidth(24)
 	gear:SetPoint("RIGHT", -2, 0)
 
-	local reset = UI.Button(head, "Reset", function() Data.Reset() end)
+	local reset = UI.Button(head, "Reset", askReset)
 	reset:SetHeight(18)
 	reset:SetPoint("RIGHT", gear, "LEFT", -2, 0)
 
 	local seg = UI.Button(head, "Current", function()
-		ns.db.segment = ns.db.segment == "current" and "overall" or "current"
-		state.detail = nil
+		if not state.session then
+			ns.db.segment = ns.db.segment == "current" and "overall" or "current"
+		end
+		state.session, state.detail = nil, nil
 		UI.Refresh()
 	end)
 	seg:SetHeight(18)
@@ -349,17 +443,24 @@ function UI.Refresh(keep)
 		ns.db.mode = ns.MODES[1].key
 		m = mode()
 	end
+	if state.session then
+		local found = false
+		for _, s in ipairs(Data.Sessions()) do
+			if s.id == state.session then found = true end
+		end
+		if not found then state.session = nil end
+	end
 	local out
 	local status = Data.Status()
 	if status then
 		out = { rows = { { kind = "note", text = status } } }
 	elseif state.detail then
-		out = Data.Spells(ns.db.segment, m, state.detail)
+		out = Data.Spells(segment(), m, state.detail)
 		if #out.rows == 0 then
-			out.rows[1] = { kind = "note", text = "No spell details" }
+			out.rows[1] = { kind = "note", text = out.hidden and "Spell details are hidden in combat" or "No spell details" }
 		end
 	else
-		out = Data.Session(ns.db.segment, m)
+		out = Data.Session(segment(), m)
 		if #out.rows == 0 then
 			out.rows[1] = { kind = "note", text = "No data yet" }
 		end
@@ -375,15 +476,21 @@ function UI.Refresh(keep)
 		if clock ~= "" then title = title .. "  " .. clock end
 	end
 	pcall(frame.titleButton.text.SetText, frame.titleButton.text, title)
-	frame.segButton:SetLabel(ns.db.segment == "overall" and "Overall" or "Current")
-	frame.segButton:SetActive(ns.db.segment == "overall")
+	local overall = not state.session and ns.db.segment == "overall"
+	frame.segButton:SetLabel(state.session and "Earlier" or (overall and "Overall" or "Current"))
+	frame.segButton:SetActive(state.session ~= nil or overall)
 	frame.list:SetData(out.rows, keep)
 end
 
-function UI.Show()
+function UI.Show(quiet)
 	if not ns.db then return end
 	if not frame then build() end
 	ns.db.shown = true
+	if ns.db.combatOnly and not fighting then
+		frame:Hide()
+		if not quiet then ns.Print("shown in combat only, change it under /acore") end
+		return
+	end
 	frame:Show()
 	UI.Refresh()
 end
@@ -395,7 +502,7 @@ function UI.Hide()
 end
 
 function UI.Toggle()
-	if frame and frame:IsShown() then
+	if frame and ns.db.shown then
 		UI.Hide()
 	else
 		UI.Show()
@@ -403,7 +510,7 @@ function UI.Toggle()
 end
 
 ns:Listen("LOGIN", function()
-	if ns.db.shown then UI.Show() end
+	if ns.db.shown then UI.Show(true) end
 end)
 
 ns:Listen("DATA", function()
@@ -411,10 +518,20 @@ ns:Listen("DATA", function()
 end)
 
 ns:Listen("VIEW_CHANGED", function()
-	state.detail = nil
+	state.detail, state.session = nil, nil
 	UI.Refresh()
 end)
 
 ns:Listen("LAYOUT_RESET", function()
 	if frame then frame:Restore() end
+end)
+
+ns:On("PLAYER_REGEN_DISABLED", function()
+	fighting = true
+	if ns.db and ns.db.combatOnly then applyShown() end
+end)
+
+ns:On("PLAYER_REGEN_ENABLED", function()
+	fighting = false
+	if ns.db and ns.db.combatOnly then applyShown() end
 end)
